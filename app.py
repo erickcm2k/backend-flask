@@ -2,6 +2,9 @@ from flask import Flask, request, send_file, jsonify
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import padding
+from cryptography.hazmat.primitives.asymmetric import rsa, padding as asym_padding
+from cryptography.hazmat.primitives import serialization, hashes
+import base64
 import os
 from flask_cors import CORS
 
@@ -290,6 +293,161 @@ def decrypt_image_OFB_endpoint():
     
     decrypted_file = decrypt_image_ofb(key,iv, input_file)    
     return send_file(decrypted_file, mimetype='image/bmp')
+
+
+# Para la parte de RSA
+
+# Funciones para RSA
+
+def rsa_decrypt_fn(llave_privada, texto_cifrado):
+  
+    try:
+        # Cargar la clave privada desde el string PEM
+        private_key = serialization.load_pem_private_key(
+            llave_privada.encode('utf-8'),
+            password=None,  # Si la clave privada tiene contraseña, proporciona aquí
+            backend=default_backend()
+        )
+
+        # Decodificar el texto cifrado desde base64
+        encrypted_data = base64.b64decode(texto_cifrado)
+
+        # Obtener la longitud de la clave AES cifrada
+        aes_key_length = int.from_bytes(encrypted_data[:4], 'big')
+
+        # Separar los datos cifrados de la clave AES y el IV
+        encrypted_aes_key = encrypted_data[4 : 4 + aes_key_length]
+        encrypted_iv = encrypted_data[4 + aes_key_length :]
+
+        # Descifrar la clave AES usando la clave privada RSA
+        aes_key_bytes = private_key.decrypt(
+            encrypted_aes_key,
+            asym_padding.OAEP(
+                mgf=asym_padding.MGF1(algorithm=hashes.SHA256()),
+                algorithm=hashes.SHA256(),
+                label=None
+            )
+        )
+
+        # Descifrar el IV usando la clave privada RSA
+        iv_bytes = private_key.decrypt(
+            encrypted_iv,
+            asym_padding.OAEP(
+                mgf=asym_padding.MGF1(algorithm=hashes.SHA256()),
+                algorithm=hashes.SHA256(),
+                label=None
+            )
+        )
+
+        # Convertir la clave AES y el IV a base64
+        aes_key_base64 = base64.b64encode(aes_key_bytes).decode('utf-8')
+        iv_base64 = base64.b64encode(iv_bytes).decode('utf-8')
+
+        # Retornar la clave AES y el IV como texto, separados por un salto de línea
+        decrypted_text = aes_key_base64 + '\n' + iv_base64
+        return decrypted_text
+
+    except Exception as e:
+        print(f"Error durante el descifrado: {e}")
+        return None
+
+def rsa_encrypt_fn(llave_publica, archivo_a_cifrar):
+    # Leer la clave pública desde el archivo
+        
+    public_key = serialization.load_pem_public_key(
+        llave_publica.encode('utf-8'),  # Codificar el string a bytes
+        backend=default_backend()
+    )        
+
+    # Leer el archivo que contiene la clave AES y el IV
+    lines = archivo_a_cifrar.splitlines()
+    aes_key = lines[0].strip()
+    iv = lines[1].strip()
+
+    # Convertir la clave AES y el IV a bytes
+    aes_key_bytes = base64.b64decode(aes_key)
+    iv_bytes = base64.b64decode(iv)
+
+    # Cifrar la clave AES y el IV usando la clave pública RSA
+    encrypted_aes_key = public_key.encrypt(
+        aes_key_bytes,
+        asym_padding.OAEP(
+            mgf=asym_padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None
+        )
+    )
+
+    encrypted_iv = public_key.encrypt(
+        iv_bytes,
+        asym_padding.OAEP(
+            mgf=asym_padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None
+        )
+    )
+
+    # Guardar la longitud de la clave AES cifrada
+    aes_key_length = len(encrypted_aes_key)
+
+    # Guardar el texto cifrado en un archivo .txt
+    encrypted_data = aes_key_length.to_bytes(4, 'big') + encrypted_aes_key + encrypted_iv
+    encrypted_text = base64.b64encode(encrypted_data).decode('utf-8')
+
+    print("Cifrado completado")
+    return encrypted_text  # Retornar el texto cifrado en base64
+
+def rsa_get_keys_fn():
+    private_key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=2048,
+        backend=default_backend()
+    )
+    public_key = private_key.public_key()
+
+    # Serializar las claves a formato PEM (texto)
+    private_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption()  # Opcional: agregar contraseña
+    )
+    public_pem = public_key.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+
+    return private_pem.decode('utf-8'), public_pem.decode('utf-8')  # Decodificar a str
+
+@app.route('/RSA/decrypt', methods=['POST'])
+def rsa_decrypt():
+    public_key_file = request.form['privateKey']
+    texto_a_cifrar = request.form['content']
+
+    # Llamar a la función rsa_encrypt_fn
+    ruta_archivo_cifrado = rsa_decrypt_fn(public_key_file, texto_a_cifrar)
+
+    # Retornar la ruta del archivo cifrado (o su contenido)
+    return ruta_archivo_cifrado
+
+@app.route('/RSA/encrypt', methods=['POST'])
+def rsa_encrypt():
+    public_key_file = request.form['publicKey']
+    texto_a_cifrar = request.form['content']
+
+    # Llamar a la función rsa_encrypt_fn
+    ruta_archivo_cifrado = rsa_encrypt_fn(public_key_file, texto_a_cifrar)
+
+    # Retornar la ruta del archivo cifrado (o su contenido)
+    return ruta_archivo_cifrado
+    
+@app.route('/RSA/getKeys', methods=['GET'])
+def rsa_get_keys():
+    private_key_text, public_key_text = rsa_get_keys_fn()
+    return jsonify({
+        "private_key": private_key_text, 
+        "public_key": public_key_text
+    })
+
 
 if __name__ == '__main__':
     app.run(debug=True)
