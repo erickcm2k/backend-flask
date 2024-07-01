@@ -2,12 +2,13 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
-from flask import Flask, request, jsonify, send_file
-import io
+from flask import Flask,Blueprint, request,send_file, jsonify
 from flask_cors import CORS
-
+import io
 app = Flask(__name__)
 CORS(app)
+
+bp = Blueprint('hibrid_betito', __name__)
 
 # Función para generar llaves RSA
 def generar_llaves():
@@ -57,6 +58,7 @@ def descifrar(archivo_cifrado_data, archivo_dh_data):
     aes_key_bytes, iv_bytes = cargar_claves_dh(archivo_dh_data)
 
     cipher = Cipher(algorithms.AES(aes_key_bytes), modes.CBC(iv_bytes), backend=default_backend())
+    print('bien hasta aquí')
     decryptor = cipher.decryptor()
     padded_data = decryptor.update(archivo_cifrado_data) + decryptor.finalize()
     data = padded_data.rstrip(b'\0')
@@ -80,25 +82,34 @@ def sign_data(llave_privada_data, archivo_a_cifrar_data):
     )
     return signature
 
-# Endpoint para crear un hash de un archivo
-@app.route('/create_hash', methods=['POST'])
-def create_hash_endpoint():
+def verificar(data, signature):
+    # Leer la clave pública desde el archivo
+    with open(llave_publica, "rb") as pub_file:
+        public_key = serialization.load_pem_public_key(
+            pub_file.read(),
+            backend=default_backend()
+        )
+    # Crear el hash del contenido
+    digest = create_hash(data)
+
+    # Verificar la firma
     try:
-        archivo = request.files['archivo']
-        if not archivo:
-            return jsonify({'error': 'No se proporcionó ningún archivo'}), 400
+        public_key.verify(
+            signature,
+            digest,
+            padding.PSS(
+                mgf=padding.MGF1(hashes.SHA256()),
+                salt_length=padding.PSS.MAX_LENGTH
+            ),
+            hashes.SHA256()
+        )
+        print("La firma digital es válida.")
+    except:
+        print("La firma digital NO es válida.")
+        return False
+    return True
 
-        data = archivo.read()
-        digest = create_hash(data)
-        return jsonify({'hash': digest.hex()})  # Devolver el hash en hexadecimal
 
-    except Exception as e:
-        app.logger.error(f"Error en create_hash_endpoint: {e}")
-        return jsonify({'error': str(e)}), 500
-
-# Endpoint para leer un archivo y devolver su contenido
-@app.route('/read_file', methods=['POST'])
-def read_file_endpoint():
     try:
         archivo = request.files['archivo']
         if not archivo:
@@ -110,34 +121,8 @@ def read_file_endpoint():
         app.logger.error(f"Error en read_file_endpoint: {e}")
         return jsonify({'error': str(e)}), 500
 
-# Endpoint para descifrar un archivo
-@app.route('/descifrar', methods=['POST'])
-def descifrar_endpoint():
-    try:
-        archivo_cifrado = request.files['archivo_cifrado']
-        archivo_dh = request.files['archivo_dh']
-
-        if not archivo_cifrado or not archivo_dh:
-            return jsonify({'error': 'Faltan archivos necesarios'}), 400
-
-        archivo_cifrado_data = archivo_cifrado.read()
-        archivo_dh_data = archivo_dh.read()
-
-        datos_descifrados = descifrar(archivo_cifrado_data, archivo_dh_data)
-
-        return send_file(
-            io.BytesIO(datos_descifrados),
-            mimetype='application/octet-stream',
-            as_attachment=True,
-            download_name='archivo_descifrado.txt'
-        )
-
-    except Exception as e:
-        app.logger.error(f"Error en descifrar_endpoint: {e}")
-        return jsonify({'error': str(e)}), 500
-
 # Endpoint para verificar la firma de un archivo
-@app.route('/verificar', methods=['POST'])
+@bp.route('/verificar', methods=['POST'])
 def verificar_endpoint():
     try:
         archivo_firmado = request.files['archivo_firmado']
@@ -168,6 +153,32 @@ def verificar_endpoint():
         app.logger.error(f"Error en verificar_endpoint: {e}")
         return jsonify({'error': str(e)}), 500
 
+# Endpoint para descifrar un archivo
+@bp.route('/descifrar', methods=['POST'])
+def descifrar_endpoint():    
+    try:                
+        archivo_dh = request.files['archivo_dh']
+        archivo_cifrado = request.files['archivo_cifrado']
+
+
+        if not archivo_cifrado or not archivo_dh:
+            return jsonify({'error': 'Faltan archivos necesarios'}), 400
+
+        archivo_cifrado_data = archivo_cifrado.read()
+        archivo_dh_data = archivo_dh.read()
+
+        datos_descifrados = descifrar(archivo_cifrado_data, archivo_dh_data)
+
+        return send_file(
+            io.BytesIO(datos_descifrados),
+            mimetype='application/octet-stream',
+            as_attachment=True,
+            download_name='archivo_descifrado.txt'
+        )
+
+    except Exception as e:
+        app.logger.error(f"Error en descifrar_endpoint: {e}")
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
