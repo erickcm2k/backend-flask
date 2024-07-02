@@ -122,34 +122,40 @@ def generar_llaves_endpoint():
     })
 
 # Endpoint para cifrar un archivo
+from flask import send_file, request
+import io
+
 @bp.route('/encrypt', methods=['POST'])
 def encrypt_endpoint():
     try:
         archivo_dh = request.files['archivo_dh']
         archivo_a_cifrar = request.files['archivo_a_cifrar']
 
-        # Guardar los archivos temporalmente
+        # Guardar los archivos temporalmente (puedes optimizar esto si prefieres)
         archivo_dh.save('temp_archivo_dh')
         archivo_a_cifrar.save('temp_archivo_a_cifrar')
 
         # Cifrar el archivo
         archivo_cifrado = encrypt('temp_archivo_dh', 'temp_archivo_a_cifrar', 'temp_archivo_cifrado.bin')
 
-        # Leer el contenido del archivo cifrado
-        with open(archivo_cifrado, 'rb') as f:
-            archivo_cifrado_data = f.read()
+        # Enviar el archivo cifrado como respuesta
+        return send_file(
+            archivo_cifrado,
+            mimetype='application/octet-stream',
+            as_attachment=True,
+            download_name='archivo_cifrado.bin'
+        )
 
-        return jsonify({
-            'archivo_cifrado': archivo_cifrado_data.decode('latin-1')  # Asumiendo codificación latin-1
-        })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
     finally:
         # Eliminar los archivos temporales después de usarlos
         import os
         os.remove('temp_archivo_dh')
         os.remove('temp_archivo_a_cifrar')
         os.remove('temp_archivo_cifrado.bin')
+
 
 # Endpoint para firmar un archivo cifrado
 @bp.route('/sign_data', methods=['POST'])

@@ -3,6 +3,7 @@ from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 from flask import Flask,Blueprint, request,send_file, jsonify
+from cryptography.exceptions import InvalidSignature
 from flask_cors import CORS
 import io
 app = Flask(__name__)
@@ -82,103 +83,91 @@ def sign_data(llave_privada_data, archivo_a_cifrar_data):
     )
     return signature
 
-def verificar(data, signature):
-    # Leer la clave pública desde el archivo
-    with open(llave_publica, "rb") as pub_file:
+def verificar(data, signature, llave_publica):
+    """Verifica la firma digital utilizando la clave pública proporcionada."""
+    try:
         public_key = serialization.load_pem_public_key(
-            pub_file.read(),
+            llave_publica.read(), 
             backend=default_backend()
         )
-    # Crear el hash del contenido
-    digest = create_hash(data)
 
-    # Verificar la firma
-    try:
         public_key.verify(
             signature,
-            digest,
+            create_hash(data),
             padding.PSS(
                 mgf=padding.MGF1(hashes.SHA256()),
                 salt_length=padding.PSS.MAX_LENGTH
             ),
             hashes.SHA256()
         )
-        print("La firma digital es válida.")
-    except:
-        print("La firma digital NO es válida.")
-        return False
-    return True
+        return True  # La firma es válida
+    except InvalidSignature:
+        return False  # La firma no es válida
 
-
-    try:
-        archivo = request.files['archivo']
-        if not archivo:
-            return jsonify({'error': 'No se proporcionó ningún archivo'}), 400
-
-        contenido = archivo.read()
-        return jsonify({'contenido': contenido.decode('utf-8')})  # Ajusta la codificación si es necesario
-    except Exception as e:
-        app.logger.error(f"Error en read_file_endpoint: {e}")
-        return jsonify({'error': str(e)}), 500
-
-# Endpoint para verificar la firma de un archivo
 @bp.route('/verificar', methods=['POST'])
 def verificar_endpoint():
+    """Endpoint Flask para verificar la firma digital de un archivo cifrado con AES."""
     try:
-        archivo_firmado = request.files['archivo_firmado']
+        # Obtener los archivos del formulario
+        archivo_firmado = request.files['archivo_firmado'].read()  
         llave_publica = request.files['llave_publica']
+        archivo_dh = request.files['archivo_dh'].read()  
+        archivo_descifrado = request.files['archivo_descifrado'].read() 
 
-        if not archivo_firmado or not llave_publica:
-            return jsonify({'error': 'Faltan archivos necesarios'}), 400
+        if not all([archivo_firmado, llave_publica, archivo_dh, archivo_descifrado]):
+            return jsonify({"error": "Faltan archivos necesarios"}), 400
 
-        archivo_firmado_data = archivo_firmado.read()
-        llave_publica_data = llave_publica.read()
+        # Cargar la clave AES y el IV
+        aes_key, iv = cargar_claves_dh(archivo_dh)
 
-        # Extraer datos y firma del archivo firmado
+        # Separar datos y firma (asumiendo formato PKCS#7)
         separator = b'\n-----BEGIN SIGNATURE-----\n'
         end_separator = b'\n-----END SIGNATURE-----\n'
-        first_position = archivo_firmado_data.find(separator)
-        second_position = archivo_firmado_data.find(end_separator)
+        first_position = archivo_firmado.find(separator)
+        second_position = archivo_firmado.find(end_separator)
+
         if first_position == -1 or second_position == -1:
-            return jsonify({'error': 'Formato de archivo firmado inválido'}), 400
+            return jsonify({"error": "Formato de archivo firmado inválido"}), 400
 
-        encrypted_data = archivo_firmado_data[:first_position]
-        signature = archivo_firmado_data[first_position + len(separator):second_position]
+        #encrypted_data = archivo_combinado[:first_position]
+        signature = archivo_firmado[first_position + len(separator):second_position]
 
-        es_valida = verificar(encrypted_data, signature, llave_publica_data)
+        # Verificar la firma con los datos del archivo descifrado (bytes)
+        es_valida = verificar(archivo_descifrado, signature, llave_publica)
 
-        return jsonify({'verificacion': es_valida})
+        return jsonify({"verificacion": es_valida})
 
     except Exception as e:
-        app.logger.error(f"Error en verificar_endpoint: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
-# Endpoint para descifrar un archivo
 @bp.route('/descifrar', methods=['POST'])
-def descifrar_endpoint():    
-    try:                
+def descifrar_endpoint():
+    try:
         archivo_dh = request.files['archivo_dh']
         archivo_cifrado = request.files['archivo_cifrado']
-
 
         if not archivo_cifrado or not archivo_dh:
             return jsonify({'error': 'Faltan archivos necesarios'}), 400
 
-        archivo_cifrado_data = archivo_cifrado.read()
-        archivo_dh_data = archivo_dh.read()
+        # Apertura de archivos en modo binario (clave para archivos no texto)
+        with archivo_cifrado.stream as f_cifrado, archivo_dh.stream as f_dh:
+            archivo_cifrado_data = f_cifrado.read()
+            archivo_dh_data = f_dh.read()
 
         datos_descifrados = descifrar(archivo_cifrado_data, archivo_dh_data)
 
+        # Uso de BytesIO para enviar datos binarios
         return send_file(
             io.BytesIO(datos_descifrados),
-            mimetype='application/octet-stream',
+            mimetype='application/octet-stream',  # Tipo genérico para binarios
             as_attachment=True,
-            download_name='archivo_descifrado.txt'
+            download_name='archivo_descifrado.bin'  # Extensión .bin más adecuada
         )
 
     except Exception as e:
         app.logger.error(f"Error en descifrar_endpoint: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Error interno en el servidor'}), 500  # Mensaje genérico para seguridad
+
 
 if __name__ == '__main__':
     app.run(debug=True)

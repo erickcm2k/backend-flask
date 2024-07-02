@@ -6,6 +6,8 @@ from cryptography.hazmat.primitives import hashes
 from flask import Flask, Blueprint,request, jsonify
 from flask_cors import CORS
 
+bp = Blueprint('llavecom_alicia', __name__)
+
 app = Flask(__name__)
 CORS(app, supports_credentials=True)
 # Función para cargar la clave privada desde bytes

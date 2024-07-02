@@ -3,6 +3,7 @@ from blueprints.DH_Alicia import bp as DH_Alicia_bp
 from blueprints.DH_Betito import bp as DH_Betito_bp
 from blueprints.hibrid_Alicia import bp as Hibrid_Alicia_bp
 from blueprints.hibrid_Betito import bp as Hibrid_Betito_bp
+from blueprints.LlaveCom_Alicia import bp as LlaveCom_Alicia_bp
 from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
@@ -11,6 +12,7 @@ app.register_blueprint(DH_Alicia_bp, url_prefix='/DH_Alicia')
 app.register_blueprint(DH_Betito_bp, url_prefix='/DH_Betito')
 app.register_blueprint(Hibrid_Alicia_bp, url_prefix='/Hibrid_Alicia')
 app.register_blueprint(Hibrid_Betito_bp, url_prefix='/Hibrid_Betito')
+app.register_blueprint(LlaveCom_Alicia_bp, url_prefix='/LlaveCom_Alicia')
 
 if __name__ == '__main__':
     app.run(debug=True)
